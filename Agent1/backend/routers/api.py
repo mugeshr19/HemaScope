@@ -1,0 +1,219 @@
+"""API routers: detect, predict, history, metrics, health, classes, ask."""
+import logging
+from pathlib import Path
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Body
+from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.config import settings
+from backend.db.models import get_db
+from backend.services.inference_service import inference_service
+from backend.services.prediction_service import prediction_service
+from backend.schemas.schemas import (
+    PredictionResponse, PredictionSummary, MetricsResponse, HealthResponse
+)
+from llm.reasoning import llm_reasoner
+from llm.agent import blood_cell_agent
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+
+@router.post("/agent")
+async def agent_chat(
+    question: str = Body(..., embed=True),
+    image_path: str = Body(default=None, embed=True),
+):
+    """
+    True agentic endpoint — LLM decides which tools to call.
+    Optionally provide image_path to trigger detection automatically.
+    """
+    try:
+        answer = blood_cell_agent.run(question, image_path)
+        return {"question": question, "answer": answer}
+    except Exception as e:
+        logger.error("Agent error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/detect")
+async def detect(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+    """Primary detection endpoint — returns counts, detections, annotated URL, LLM summary."""
+    upload_dir = settings.RESULTS_DIR / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    image_path = upload_dir / file.filename
+
+    content = await file.read()
+    with open(image_path, "wb") as f:
+        f.write(content)
+
+    try:
+        payload = inference_service.predict(str(image_path))
+    except Exception as e:
+        logger.error("Inference failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    explanation = llm_reasoner.explain(payload)
+    payload["summary"] = explanation
+
+    await prediction_service.save(db, payload)
+
+    return {
+        "prediction_id":   payload["prediction_id"],
+        "image_name":      payload["image_name"],
+        "total_cells":     payload["total_cells"],
+        "counts":          {"rbc": payload["rbc"], "wbc": payload["wbc"], "platelet": payload["platelet"]},
+        "inference_time":  payload["inference_time"],
+        "annotated_image": f"/api/v1/results/{payload['prediction_id']}/annotated",
+        "cropped_cells":   f"/api/v1/results/{payload['prediction_id']}/download/crops",
+        "detections":      payload["detections"],
+        "summary":         explanation,
+    }
+
+
+@router.post("/predict", response_model=PredictionResponse)
+async def predict(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+    upload_dir = settings.RESULTS_DIR / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    image_path = upload_dir / file.filename
+
+    content = await file.read()
+    with open(image_path, "wb") as f:
+        f.write(content)
+
+    try:
+        payload = inference_service.predict(str(image_path))
+    except Exception as e:
+        logger.error("Inference failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    record = await prediction_service.save(db, payload)
+
+    detections = [
+        {**d, "class": d["class"]}
+        for d in payload["detections"]
+    ]
+
+    return PredictionResponse(
+        prediction_id=record.id,
+        image_name=record.image_name,
+        total_cells=record.total_cells,
+        rbc=record.rbc_count,
+        wbc=record.wbc_count,
+        platelet=record.platelet_count,
+        inference_time=record.inference_time,
+        timestamp=record.timestamp,
+        annotated_image_url=f"/results/{record.id}/annotated",
+        detections=[{**d, **{"class": d["class"]}} for d in detections],
+    )
+
+
+@router.get("/history", response_model=list[PredictionSummary])
+async def get_history(skip: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
+    records = await prediction_service.get_all(db, skip=skip, limit=limit)
+    return [
+        PredictionSummary(
+            prediction_id=r.id,
+            image_name=r.image_name,
+            timestamp=r.timestamp,
+            total_cells=r.total_cells,
+            rbc=r.rbc_count,
+            wbc=r.wbc_count,
+            platelet=r.platelet_count,
+            inference_time=r.inference_time,
+        )
+        for r in records
+    ]
+
+
+@router.get("/metrics", response_model=MetricsResponse)
+async def get_metrics(db: AsyncSession = Depends(get_db)):
+    return await prediction_service.get_metrics(db)
+
+
+@router.get("/classes")
+async def get_classes():
+    """Return the model's class names and their IDs."""
+    return {
+        "classes": [
+            {"id": i, "name": name}
+            for i, name in enumerate(settings.CLASS_NAMES)
+        ]
+    }
+
+
+@router.post("/ask/{prediction_id}")
+async def ask_question(
+    prediction_id: str,
+    question: str = Body(..., embed=True),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ask the LLM a question about a specific prediction."""
+    record = await prediction_service.get_by_id(db, prediction_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+    payload = {
+        "total_cells": record.total_cells,
+        "rbc":         record.rbc_count,
+        "wbc":         record.wbc_count,
+        "platelet":    record.platelet_count,
+        "detections":  record.detections or [],
+    }
+    answer = llm_reasoner.answer(question, payload)
+    return {"question": question, "answer": answer}
+
+
+@router.get("/health", response_model=HealthResponse)
+async def health_check(db: AsyncSession = Depends(get_db)):
+    db_ok = False
+    try:
+        await db.execute(__import__("sqlalchemy").text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        pass
+    return HealthResponse(
+        status="healthy" if inference_service.is_loaded() and db_ok else "degraded",
+        model_loaded=inference_service.is_loaded(),
+        database_connected=db_ok,
+        version=settings.APP_VERSION,
+    )
+
+
+@router.get("/results/{prediction_id}/annotated")
+async def get_annotated_image(prediction_id: str, db: AsyncSession = Depends(get_db)):
+    record = await prediction_service.get_by_id(db, prediction_id)
+    if not record or not record.annotated_path:
+        raise HTTPException(status_code=404, detail="Annotated image not found")
+    return FileResponse(record.annotated_path, media_type="image/png")
+
+
+@router.get("/results/{prediction_id}/download/json")
+async def download_json(prediction_id: str):
+    json_path = settings.RESULTS_DIR / prediction_id / "results.json"
+    if not json_path.exists():
+        raise HTTPException(status_code=404, detail="JSON not found")
+    return FileResponse(json_path, media_type="application/json", filename="results.json")
+
+
+@router.get("/results/{prediction_id}/download/csv")
+async def download_csv(prediction_id: str):
+    csv_path = settings.RESULTS_DIR / prediction_id / "detections.csv"
+    if not csv_path.exists():
+        raise HTTPException(status_code=404, detail="CSV not found")
+    return FileResponse(csv_path, media_type="text/csv", filename="detections.csv")
+
+
+@router.get("/results/{prediction_id}/download/crops")
+async def download_crops(prediction_id: str):
+    import zipfile, io
+    crop_dir = settings.CROPS_DIR / prediction_id
+    if not crop_dir.exists():
+        raise HTTPException(status_code=404, detail="Crops not found")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in crop_dir.glob("*.png"):
+            zf.write(f, f.name)
+    buf.seek(0)
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(buf, media_type="application/zip",
+                             headers={"Content-Disposition": f"attachment; filename=crops_{prediction_id}.zip"})

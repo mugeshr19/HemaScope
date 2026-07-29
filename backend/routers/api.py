@@ -14,9 +14,106 @@ from backend.schemas.schemas import (
 )
 from llm.reasoning import llm_reasoner
 from llm.agent import blood_cell_agent
+from Agent2.agent2_malaria_screening import MalariaScreeningAgent
+
+_malaria_agent = MalariaScreeningAgent()
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@router.post("/malaria/from-prediction/{prediction_id}")
+async def malaria_from_prediction(prediction_id: str, db: AsyncSession = Depends(get_db)):
+    """Run Agent 2 on RBC crops already saved by Agent 1 for a given prediction."""
+    import cv2
+
+    record = await prediction_service.get_by_id(db, prediction_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+
+    # Load only RBC crops from disk
+    rbc_crops = []
+    for det in (record.detections or []):
+        if det.get("class") == "RBC":
+            crop = cv2.imread(det["crop_path"])
+            if crop is not None:
+                rbc_crops.append(crop)
+
+    if not rbc_crops:
+        return {
+            "total_rbc": 0, "infected_rbc": 0, "parasite_density_pct": 0.0,
+            "confidence": 0.0, "risk_level": "Negative",
+            "recommendation": "No RBC crops found for this prediction.",
+            "per_cell_predictions": [],
+            "agent1": {
+                "total_cells": record.total_cells,
+                "rbc": record.rbc_count,
+                "wbc": record.wbc_count,
+                "platelet": record.platelet_count,
+            },
+        }
+
+    try:
+        result = _malaria_agent.run(rbc_crops)
+    except Exception as e:
+        logger.error("Agent2 failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Malaria screening failed: {e}")
+
+    return {
+        **result.to_dict(),
+        "agent1": {
+            "total_cells": record.total_cells,
+            "rbc": record.rbc_count,
+            "wbc": record.wbc_count,
+            "platelet": record.platelet_count,
+        },
+    }
+
+
+@router.post("/malaria")
+async def malaria_screen(file: UploadFile = File(...)):
+    """Agent 1 → Agent 2 pipeline: detect RBC crops then screen for malaria."""
+    import cv2
+    from Agent1.inference.pipeline.detect_and_crop import detect_and_crop
+
+    upload_dir = settings.RESULTS_DIR / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    image_path = upload_dir / file.filename
+
+    content = await file.read()
+    with open(image_path, "wb") as f:
+        f.write(content)
+
+    try:
+        detection = detect_and_crop(str(image_path))
+    except Exception as e:
+        logger.error("Agent1 failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Detection failed: {e}")
+
+    if not detection.rbc_crops:
+        return {
+            "total_rbc": 0, "infected_rbc": 0, "parasite_density_pct": 0.0,
+            "confidence": 0.0, "risk_level": "Negative",
+            "recommendation": "No RBC crops detected in this image.",
+            "per_cell_predictions": [],
+            "agent1": {"total_cells": 0, "rbc": 0, "wbc": 0, "platelet": 0},
+        }
+
+    try:
+        result = _malaria_agent.run(detection.rbc_crops)
+    except Exception as e:
+        logger.error("Agent2 failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Malaria screening failed: {e}")
+
+    return {
+        **result.to_dict(),
+        "agent1": {
+            "total_cells": len(detection.rbc_crops) + len(detection.wbc_crops) + detection.platelet_count,
+            "rbc": len(detection.rbc_crops),
+            "wbc": len(detection.wbc_crops),
+            "platelet": detection.platelet_count,
+        },
+    }
 
 
 @router.post("/agent")
