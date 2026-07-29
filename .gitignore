@@ -29,6 +29,7 @@ runs/
 results/
 crops/
 logs/
+!frontend/src/app/results/
 
 # ── Dataset raw files ─────────────────────────────────────
 datasets/raw/
