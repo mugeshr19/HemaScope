@@ -17,10 +17,12 @@ from llm.agent import blood_cell_agent
 from Agent2.agent2_malaria_screening import MalariaScreeningAgent
 from Agent3.agent3_morphology import MorphologyAgent
 from Agent4.agent4_wbc_classifier import WBCClassifierAgent
+from Agent5.agent5_leukemia import LeukemiaScreeningAgent
 
 _malaria_agent = MalariaScreeningAgent()
 _morphology_agent = MorphologyAgent()
 _wbc_agent = WBCClassifierAgent()
+_leukemia_agent = LeukemiaScreeningAgent()
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -131,6 +133,42 @@ async def malaria_screen(file: UploadFile = File(...)):
             "platelet": detection.platelet_count,
         },
     }
+
+
+@router.post("/leukemia/from-prediction/{prediction_id}")
+async def leukemia_from_prediction(prediction_id: str, db: AsyncSession = Depends(get_db)):
+    """Run Agent 5 on WBC crops already saved by Agent 1."""
+    import cv2
+    record = await prediction_service.get_by_id(db, prediction_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+
+    wbc_crops, wbc_crop_paths = [], []
+    for det in (record.detections or []):
+        if det.get("class") == "WBC":
+            crop = cv2.imread(det["crop_path"])
+            if crop is not None:
+                wbc_crops.append(crop)
+                wbc_crop_paths.append(det["crop_path"])
+
+    if not wbc_crops:
+        return {"total_wbc": 0, "blast_count": 0, "blast_pct": 0.0,
+                "confidence": 0.0, "risk_level": "Normal",
+                "recommendation": "No WBC crops found.",
+                "class_counts": {}, "per_cell_predictions": []}
+
+    try:
+        result = _leukemia_agent.run(wbc_crops)
+    except Exception as e:
+        logger.error("Agent5 failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Leukemia screening failed: {e}")
+
+    result_dict = result.to_dict()
+    for cell in result_dict["per_cell_predictions"]:
+        idx = cell["cell_index"]
+        if idx < len(wbc_crop_paths):
+            cell["crop_url"] = f"/api/v1/crop?path={wbc_crop_paths[idx]}"
+    return result_dict
 
 
 @router.post("/wbc/from-prediction/{prediction_id}")

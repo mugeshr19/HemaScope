@@ -31,6 +31,10 @@ crops/
 logs/
 !frontend/src/app/results/
 
+# Large model files
+*.safetensors
+*.keras
+
 # ── Dataset raw files ─────────────────────────────────────
 datasets/raw/
 datasets/processed/

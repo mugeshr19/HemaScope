@@ -7,10 +7,9 @@ import { getAnnotatedImageUrl, getDownloadUrl } from "@/lib/api";
 import type { PredictionResult } from "@/types";
 import {
   Download, Microscope, Activity, Loader2,
-  ShieldAlert, ShieldCheck, ShieldQuestion, FlaskConical, Dna,
+  ShieldAlert, ShieldCheck, ShieldQuestion, FlaskConical, Dna, Biohazard,
 } from "lucide-react";
 
-// ── Risk styles for Agent 2 ───────────────────────────────────────────────────
 const RISK_STYLES: Record<string, { color: string; icon: React.ReactNode }> = {
   Negative: { color: "text-green-400 border-green-500/30 bg-green-500/5",   icon: <ShieldCheck className="w-5 h-5 text-green-400" /> },
   Low:      { color: "text-yellow-400 border-yellow-500/30 bg-yellow-500/5", icon: <ShieldQuestion className="w-5 h-5 text-yellow-400" /> },
@@ -18,7 +17,6 @@ const RISK_STYLES: Record<string, { color: string; icon: React.ReactNode }> = {
   High:     { color: "text-red-400 border-red-500/30 bg-red-500/5",          icon: <ShieldAlert className="w-5 h-5 text-red-400" /> },
 };
 
-// ── Severity styles for Agent 3 ───────────────────────────────────────────────
 const SEVERITY_STYLES: Record<string, { color: string; icon: React.ReactNode }> = {
   Normal:   { color: "text-green-400 border-green-500/30 bg-green-500/5",   icon: <ShieldCheck className="w-5 h-5 text-green-400" /> },
   Mild:     { color: "text-yellow-400 border-yellow-500/30 bg-yellow-500/5", icon: <ShieldQuestion className="w-5 h-5 text-yellow-400" /> },
@@ -43,7 +41,6 @@ const STATUS_COLORS: Record<string, string> = {
   Low: "text-yellow-400", Abnormal: "text-orange-400",
 };
 
-// ── Agent panel wrapper ───────────────────────────────────────────────────────
 function AgentPanel({ title, subtitle, icon, onRun, loading, ran, children }: {
   title: string; subtitle: string; icon: React.ReactNode;
   onRun: () => void; loading: boolean; ran: boolean; children?: React.ReactNode;
@@ -58,8 +55,7 @@ function AgentPanel({ title, subtitle, icon, onRun, loading, ran, children }: {
         {!ran && (
           <button onClick={onRun} disabled={loading}
             className="flex items-center gap-2 px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 hover:bg-primary/90 transition-colors">
-            {loading ? <><Loader2 className="w-4 h-4 animate-spin" />Running...</> : icon}
-            {!loading && title.split("—")[0].trim()}
+            {loading ? <><Loader2 className="w-4 h-4 animate-spin" />Running...</> : <>{icon}{title.split("—")[0].trim()}</>}
           </button>
         )}
       </div>
@@ -75,17 +71,14 @@ function ResultsContent() {
   const [error, setError] = useState("");
   const detections = result?.detections ?? [];
 
-  // Agent 2 — Malaria
   const [malaria, setMalaria] = useState<Record<string, unknown> | null>(null);
   const [malariaLoading, setMalariaLoading] = useState(false);
-
-  // Agent 3 — Morphology
   const [morph, setMorph] = useState<Record<string, unknown> | null>(null);
   const [morphLoading, setMorphLoading] = useState(false);
-
-  // Agent 4 — WBC
   const [wbc, setWbc] = useState<Record<string, unknown> | null>(null);
   const [wbcLoading, setWbcLoading] = useState(false);
+  const [leukemia, setLeukemia] = useState<Record<string, unknown> | null>(null);
+  const [leukemiaLoading, setLeukemiaLoading] = useState(false);
 
   const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
@@ -108,19 +101,23 @@ function ResultsContent() {
     catch { setMalaria({ error: "Malaria screening failed." }); }
     finally { setMalariaLoading(false); }
   };
-
   const runMorph = async () => {
     setMorphLoading(true);
     try { const { data } = await axios.post(`${base}/morphology/from-prediction/${id}`); setMorph(data); }
     catch { setMorph({ error: "Morphology classification failed." }); }
     finally { setMorphLoading(false); }
   };
-
   const runWbc = async () => {
     setWbcLoading(true);
     try { const { data } = await axios.post(`${base}/wbc/from-prediction/${id}`); setWbc(data); }
     catch { setWbc({ error: "WBC classification failed." }); }
     finally { setWbcLoading(false); }
+  };
+  const runLeukemia = async () => {
+    setLeukemiaLoading(true);
+    try { const { data } = await axios.post(`${base}/leukemia/from-prediction/${id}`); setLeukemia(data); }
+    catch { setLeukemia({ error: "Leukemia screening failed." }); }
+    finally { setLeukemiaLoading(false); }
   };
 
   if (!id) return <p className="text-muted-foreground">No prediction ID provided.</p>;
@@ -195,13 +192,9 @@ function ResultsContent() {
 
       <p className="text-xs text-muted-foreground">Inference time: {result.inference_time}s · ID: {id}</p>
 
-      {/* ── Agent 2: Malaria ─────────────────────────────────────────────────── */}
-      <AgentPanel
-        title="Malaria Screening — Agent 2"
-        subtitle={`Run DenseNet-121 on the ${result.rbc} RBC crops`}
-        icon={<Activity className="w-4 h-4" />}
-        onRun={runMalaria} loading={malariaLoading} ran={!!malaria}
-      >
+      {/* Agent 2: Malaria */}
+      <AgentPanel title="Malaria Screening — Agent 2" subtitle={`DenseNet-121 on ${result.rbc} RBC crops`}
+        icon={<Activity className="w-4 h-4" />} onRun={runMalaria} loading={malariaLoading} ran={!!malaria}>
         {malaria && !("error" in malaria) && (() => {
           const r = malaria as any;
           const style = RISK_STYLES[r.risk_level] ?? RISK_STYLES.Negative;
@@ -234,13 +227,9 @@ function ResultsContent() {
         {"error" in (malaria ?? {}) && <p className="text-red-400 text-sm">{String((malaria as any).error)}</p>}
       </AgentPanel>
 
-      {/* ── Agent 3: Morphology ──────────────────────────────────────────────── */}
-      <AgentPanel
-        title="RBC Morphology — Agent 3"
-        subtitle={`Classify each RBC as Normal / Sickle / Crescent / Elongated`}
-        icon={<FlaskConical className="w-4 h-4" />}
-        onRun={runMorph} loading={morphLoading} ran={!!morph}
-      >
+      {/* Agent 3: Morphology */}
+      <AgentPanel title="RBC Morphology — Agent 3" subtitle="Classify each RBC as Normal / Sickle / Crescent / Elongated"
+        icon={<FlaskConical className="w-4 h-4" />} onRun={runMorph} loading={morphLoading} ran={!!morph}>
         {morph && !("error" in morph) && (() => {
           const r = morph as any;
           const style = SEVERITY_STYLES[r.severity] ?? SEVERITY_STYLES.Normal;
@@ -254,7 +243,7 @@ function ResultsContent() {
                   <p className="text-sm mt-0.5 opacity-90">{r.recommendation}</p>
                 </div>
               </div>
-              <div className="grid grid-cols-4 gap-2 text-center text-sm">
+              <div className="grid grid-cols-4 gap-2 text-center">
                 {Object.entries(r.class_counts as Record<string, number>).map(([cls, cnt]) => (
                   <div key={cls} className="rounded border border-border p-2">
                     <p className={`text-xl font-bold ${MORPH_COLORS[cls] ?? ""}`}>{cnt}</p>
@@ -282,25 +271,19 @@ function ResultsContent() {
         {"error" in (morph ?? {}) && <p className="text-red-400 text-sm">{String((morph as any).error)}</p>}
       </AgentPanel>
 
-      {/* ── Agent 4: WBC ─────────────────────────────────────────────────────── */}
-      <AgentPanel
-        title="WBC Sub-type Classifier — Agent 4"
-        subtitle={`Classify each WBC into 8 sub-types using SigLIP`}
-        icon={<Dna className="w-4 h-4" />}
-        onRun={runWbc} loading={wbcLoading} ran={!!wbc}
-      >
+      {/* Agent 4: WBC */}
+      <AgentPanel title="WBC Sub-type Classifier — Agent 4" subtitle="SigLIP classifies each WBC into 8 sub-types"
+        icon={<Dna className="w-4 h-4" />} onRun={runWbc} loading={wbcLoading} ran={!!wbc}>
         {wbc && !("error" in wbc) && (() => {
           const r = wbc as any;
           const classes: string[] = Object.keys(r.class_counts ?? {});
           return (
             <div className="space-y-3">
-              <div className="rounded-lg border border-border bg-muted/10 p-3 flex items-center gap-4">
+              <div className="rounded-lg border border-border bg-muted/10 p-3 flex items-center gap-3">
                 <Dna className="w-5 h-5 text-primary" />
-                <div>
-                  <p className="font-bold">Dominant: <span className={WBC_COLORS[r.dominant_type] ?? ""}>{r.dominant_type}</span> · Total WBC: {r.total_wbc}</p>
-                </div>
+                <p className="font-bold">Dominant: <span className={WBC_COLORS[r.dominant_type] ?? ""}>{r.dominant_type}</span> · Total WBC: {r.total_wbc}</p>
               </div>
-              <div className="grid grid-cols-4 gap-2 text-center text-sm">
+              <div className="grid grid-cols-4 gap-2 text-center">
                 {classes.map(cls => (
                   <div key={cls} className="rounded border border-border p-2">
                     <p className={`text-xl font-bold ${WBC_COLORS[cls] ?? ""}`}>{r.class_counts[cls]}</p>
@@ -309,7 +292,6 @@ function ResultsContent() {
                   </div>
                 ))}
               </div>
-              {/* Differential */}
               <div className="rounded-lg border border-border overflow-hidden">
                 <div className="px-3 py-2 bg-muted/30 text-xs font-medium uppercase tracking-wider text-muted-foreground">Differential</div>
                 <table className="w-full text-xs">
@@ -331,7 +313,6 @@ function ResultsContent() {
                   </tbody>
                 </table>
               </div>
-              {/* WBC crop images grouped by type */}
               {classes.filter(c => r.class_counts[c] > 0).map((cls: string) => {
                 const cells = (r.per_cell_predictions ?? []).filter((c: any) => c.label === cls && c.crop_url);
                 if (!cells.length) return null;
@@ -353,6 +334,56 @@ function ResultsContent() {
           );
         })()}
         {"error" in (wbc ?? {}) && <p className="text-red-400 text-sm">{String((wbc as any).error)}</p>}
+      </AgentPanel>
+
+      {/* Agent 5: Leukemia */}
+      <AgentPanel title="Leukemia Screening — Agent 5" subtitle={`Screen ${result.wbc} WBC crops for blast cells / abnormal nuclei`}
+        icon={<Biohazard className="w-4 h-4" />} onRun={runLeukemia} loading={leukemiaLoading} ran={!!leukemia}>
+        {leukemia && !("error" in leukemia) && (() => {
+          const r = leukemia as any;
+          const riskColor = r.risk_level === "Normal" ? "text-green-400 border-green-500/30 bg-green-500/5"
+            : r.risk_level === "Low" ? "text-yellow-400 border-yellow-500/30 bg-yellow-500/5"
+            : r.risk_level === "Moderate" ? "text-orange-400 border-orange-500/30 bg-orange-500/5"
+            : "text-red-400 border-red-500/30 bg-red-500/5";
+          const riskIcon = r.risk_level === "Normal" ? <ShieldCheck className="w-5 h-5 text-green-400" />
+            : r.risk_level === "Low" ? <ShieldQuestion className="w-5 h-5 text-yellow-400" />
+            : <ShieldAlert className="w-5 h-5 text-red-400" />;
+          const blastCells = (r.per_cell_predictions ?? []).filter((c: any) => c.is_blast);
+          return (
+            <div className="space-y-3">
+              <div className={`rounded-lg border p-4 flex items-center gap-4 ${riskColor}`}>
+                {riskIcon}
+                <div>
+                  <p className="font-bold">{r.risk_level} Risk · Blast Cells: {r.blast_count}/{r.total_wbc} ({r.blast_pct}%)</p>
+                  <p className="text-sm mt-0.5 opacity-90">{r.recommendation}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-4 gap-2 text-center">
+                {Object.entries(r.class_counts as Record<string, number>).map(([cls, cnt]) => (
+                  <div key={cls} className={`rounded border p-2 ${["ig", "erythroblast"].includes(cls) && cnt > 0 ? "border-red-500/40 bg-red-500/5" : "border-border"}`}>
+                    <p className={`text-xl font-bold ${["ig", "erythroblast"].includes(cls) ? "text-red-400" : WBC_COLORS[cls] ?? ""}`}>{cnt}</p>
+                    <p className="text-xs text-muted-foreground capitalize">{cls}</p>
+                  </div>
+                ))}
+              </div>
+              {blastCells.length > 0 && (
+                <div>
+                  <p className="text-sm font-medium mb-2 text-red-400">Blast / Abnormal Cells ({blastCells.length})</p>
+                  <div className="flex flex-wrap gap-2">
+                    {blastCells.map((c: any) => (
+                      <div key={c.cell_index} className="rounded border border-red-500/40 bg-red-500/5 p-1 text-center">
+                        {c.crop_url && <img src={`http://localhost:8000${c.crop_url}`} className="w-16 h-16 object-cover rounded" />}
+                        <p className="text-xs text-red-400 mt-1 capitalize">{c.label}</p>
+                        <p className="text-xs text-muted-foreground">{(c.blast_score * 100).toFixed(1)}%</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+        {"error" in (leukemia ?? {}) && <p className="text-red-400 text-sm">{String((leukemia as any).error)}</p>}
       </AgentPanel>
 
     </div>
