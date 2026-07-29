@@ -24,7 +24,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting Blood Cell Detection Agent...")
-    await init_db()
+    try:
+        await init_db()
+        logger.info("Database connected.")
+    except Exception as e:
+        logger.warning("Database unavailable — history/metrics disabled. (%s)", e)
     inference_service.load_model()
     yield
     logger.info("Shutting down...")

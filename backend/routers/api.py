@@ -18,16 +18,15 @@ from llm.agent import blood_cell_agent
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+_NO_DB = HTTPException(status_code=503, detail="Database unavailable — start PostgreSQL to use this endpoint.")
+
 
 @router.post("/agent")
 async def agent_chat(
     question: str = Body(..., embed=True),
     image_path: str = Body(default=None, embed=True),
 ):
-    """
-    True agentic endpoint — LLM decides which tools to call.
-    Optionally provide image_path to trigger detection automatically.
-    """
+    """True agentic endpoint — LLM decides which tools to call."""
     try:
         answer = blood_cell_agent.run(question, image_path)
         return {"question": question, "answer": answer}
@@ -38,7 +37,7 @@ async def agent_chat(
 
 @router.post("/detect")
 async def detect(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
-    """Primary detection endpoint — returns counts, detections, annotated URL, LLM summary."""
+    """Primary detection endpoint — works with or without database."""
     upload_dir = settings.RESULTS_DIR / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     image_path = upload_dir / file.filename
@@ -56,7 +55,8 @@ async def detect(file: UploadFile = File(...), db: AsyncSession = Depends(get_db
     explanation = llm_reasoner.explain(payload)
     payload["summary"] = explanation
 
-    await prediction_service.save(db, payload)
+    if db is not None:
+        await prediction_service.save(db, payload)
 
     return {
         "prediction_id":   payload["prediction_id"],
@@ -73,6 +73,8 @@ async def detect(file: UploadFile = File(...), db: AsyncSession = Depends(get_db
 
 @router.post("/predict", response_model=PredictionResponse)
 async def predict(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+    if db is None:
+        raise _NO_DB
     upload_dir = settings.RESULTS_DIR / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     image_path = upload_dir / file.filename
@@ -88,11 +90,7 @@ async def predict(file: UploadFile = File(...), db: AsyncSession = Depends(get_d
         raise HTTPException(status_code=500, detail=str(e))
 
     record = await prediction_service.save(db, payload)
-
-    detections = [
-        {**d, "class": d["class"]}
-        for d in payload["detections"]
-    ]
+    detections = [{**d, "class": d["class"]} for d in payload["detections"]]
 
     return PredictionResponse(
         prediction_id=record.id,
@@ -104,12 +102,14 @@ async def predict(file: UploadFile = File(...), db: AsyncSession = Depends(get_d
         inference_time=record.inference_time,
         timestamp=record.timestamp,
         annotated_image_url=f"/results/{record.id}/annotated",
-        detections=[{**d, **{"class": d["class"]}} for d in detections],
+        detections=detections,
     )
 
 
 @router.get("/history", response_model=list[PredictionSummary])
 async def get_history(skip: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
+    if db is None:
+        raise _NO_DB
     records = await prediction_service.get_all(db, skip=skip, limit=limit)
     return [
         PredictionSummary(
@@ -128,12 +128,13 @@ async def get_history(skip: int = 0, limit: int = 50, db: AsyncSession = Depends
 
 @router.get("/metrics", response_model=MetricsResponse)
 async def get_metrics(db: AsyncSession = Depends(get_db)):
+    if db is None:
+        raise _NO_DB
     return await prediction_service.get_metrics(db)
 
 
 @router.get("/classes")
 async def get_classes():
-    """Return the model's class names and their IDs."""
     return {
         "classes": [
             {"id": i, "name": name}
@@ -148,7 +149,8 @@ async def ask_question(
     question: str = Body(..., embed=True),
     db: AsyncSession = Depends(get_db),
 ):
-    """Ask the LLM a question about a specific prediction."""
+    if db is None:
+        raise _NO_DB
     record = await prediction_service.get_by_id(db, prediction_id)
     if not record:
         raise HTTPException(status_code=404, detail="Prediction not found")
@@ -166,11 +168,12 @@ async def ask_question(
 @router.get("/health", response_model=HealthResponse)
 async def health_check(db: AsyncSession = Depends(get_db)):
     db_ok = False
-    try:
-        await db.execute(__import__("sqlalchemy").text("SELECT 1"))
-        db_ok = True
-    except Exception:
-        pass
+    if db is not None:
+        try:
+            await db.execute(__import__("sqlalchemy").text("SELECT 1"))
+            db_ok = True
+        except Exception:
+            pass
     return HealthResponse(
         status="healthy" if inference_service.is_loaded() and db_ok else "degraded",
         model_loaded=inference_service.is_loaded(),
@@ -181,6 +184,8 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
 @router.get("/results/{prediction_id}/annotated")
 async def get_annotated_image(prediction_id: str, db: AsyncSession = Depends(get_db)):
+    if db is None:
+        raise _NO_DB
     record = await prediction_service.get_by_id(db, prediction_id)
     if not record or not record.annotated_path:
         raise HTTPException(status_code=404, detail="Annotated image not found")

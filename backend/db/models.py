@@ -34,11 +34,14 @@ class Prediction(Base):
 
 
 async def get_db():
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
+    try:
+        async with AsyncSessionLocal() as session:
+            try:
+                yield session
+            finally:
+                await session.close()
+    except Exception:
+        yield None
 
 
 async def init_db():
