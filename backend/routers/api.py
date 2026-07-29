@@ -19,6 +19,8 @@ _morphology_agent = None
 _wbc_agent = None
 _leukemia_agent = None
 _anemia_agent = None
+_differential_agent = None
+_report_agent = None
 
 
 def _get_malaria_agent():
@@ -59,6 +61,22 @@ def _get_anemia_agent():
         from Agent6.agent6_anemia import AnemiaScreeningAgent
         _anemia_agent = AnemiaScreeningAgent()
     return _anemia_agent
+
+
+def _get_differential_agent():
+    global _differential_agent
+    if _differential_agent is None:
+        from Agent8.agent8_differential import DifferentialAggregator
+        _differential_agent = DifferentialAggregator()
+    return _differential_agent
+
+
+def _get_report_agent():
+    global _report_agent
+    if _report_agent is None:
+        from Agent9.agent9_report import ReportGenerator
+        _report_agent = ReportGenerator()
+    return _report_agent
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -242,6 +260,80 @@ async def anemia_from_prediction(prediction_id: str, db: AsyncSession = Depends(
             cell["crop_url"] = f"/api/v1/crop?path={rbc_crop_paths[idx]}"
     return result_dict
 
+
+
+@router.post("/differential/{prediction_id}")
+async def differential_from_prediction(
+    prediction_id: str,
+    body: dict = Body(default={}),
+    db: AsyncSession = Depends(get_db),
+):
+    """Agent 8 — synthesise all available agent outputs into a clinical differential."""
+    record = await prediction_service.get_by_id(db, prediction_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+
+    agent_outputs = {
+        "agent1": {
+            "total_cells": record.total_cells,
+            "rbc": record.rbc_count,
+            "wbc": record.wbc_count,
+            "platelet": record.platelet_count,
+        },
+        **{k: v for k, v in body.items() if v},
+    }
+
+    try:
+        result = _get_differential_agent().run(agent_outputs)
+    except Exception as e:
+        logger.error("Agent8 failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Differential synthesis failed: {e}")
+
+    return result.to_dict()
+
+
+@router.get("/report/{prediction_id}")
+async def generate_report(
+    prediction_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Agent 9 — generate a PDF clinical report from stored differential data."""
+    from fastapi.responses import Response
+    record = await prediction_service.get_by_id(db, prediction_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+
+    # Build minimal agent outputs from stored record for the report
+    agent_outputs = {
+        "agent1": {
+            "total_cells": record.total_cells,
+            "rbc": record.rbc_count,
+            "wbc": record.wbc_count,
+            "platelet": record.platelet_count,
+        }
+    }
+
+    # Run Agent 8 first to get synthesis
+    try:
+        diff = _get_differential_agent().run(agent_outputs)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Differential failed: {e}")
+
+    try:
+        result = _get_report_agent().run(
+            prediction_id=prediction_id,
+            image_name=record.image_name,
+            agent8_result=diff.to_dict(),
+        )
+    except Exception as e:
+        logger.error("Agent9 failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {e}")
+
+    return Response(
+        content=result.pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={result.filename}"},
+    )
 
 
 async def wbc_from_prediction(prediction_id: str, db: AsyncSession = Depends(get_db)):

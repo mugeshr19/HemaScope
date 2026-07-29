@@ -8,6 +8,7 @@ import type { PredictionResult } from "@/types";
 import {
   Download, Microscope, Activity, Loader2,
   ShieldAlert, ShieldCheck, ShieldQuestion, FlaskConical, Dna, Biohazard, Droplets,
+  BrainCircuit, FileText,
 } from "lucide-react";
 
 const RISK_STYLES: Record<string, { color: string; icon: React.ReactNode }> = {
@@ -90,6 +91,8 @@ function ResultsContent() {
 
   const [anemia, setAnemia] = useState<Record<string, unknown> | null>(null);
   const [anemiaLoading, setAnemiaLoading] = useState(false);
+  const [differential, setDifferential] = useState<Record<string, unknown> | null>(null);
+  const [differentialLoading, setDifferentialLoading] = useState(false);
 
   const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
@@ -111,6 +114,21 @@ function ResultsContent() {
     try { const { data } = await axios.post(`${base}/anemia/from-prediction/${id}`); setAnemia(data); }
     catch { setAnemia({ error: "Anemia screening failed." }); }
     finally { setAnemiaLoading(false); }
+  };
+
+  const runDifferential = async () => {
+    setDifferentialLoading(true);
+    try {
+      const payload: Record<string, unknown> = {};
+      if (malaria)  payload.agent2_malaria    = malaria;
+      if (morph)    payload.agent3_morphology  = morph;
+      if (wbc)      payload.agent4_wbc         = wbc;
+      if (leukemia) payload.agent5_leukemia    = leukemia;
+      if (anemia)   payload.agent6_anemia      = anemia;
+      const { data } = await axios.post(`${base}/differential/${id}`, payload);
+      setDifferential(data);
+    } catch { setDifferential({ error: "Differential synthesis failed." }); }
+    finally { setDifferentialLoading(false); }
   };
 
   const runMalaria = async () => {
@@ -404,6 +422,13 @@ function ResultsContent() {
         {"error" in (leukemia ?? {}) && <p className="text-red-400 text-sm">{String((leukemia as any).error)}</p>}
       </AgentPanel>
 
+      {/* Agent 8: Differential — hint to run agents first */}
+      {!malaria && !morph && !wbc && !leukemia && !anemia && (
+        <div className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
+          Run Agents 2–6 above first, then synthesise with Agent 8.
+        </div>
+      )}
+
       {/* Agent 6: Anemia */}
       <AgentPanel title="Anemia Screening — Agent 6" subtitle={`ResNet18 regressor predicts MCV & Hb from ${result.rbc} RBC crops`}
         icon={<Droplets className="w-4 h-4" />} onRun={runAnemia} loading={anemiaLoading} ran={!!anemia}>
@@ -455,6 +480,36 @@ function ResultsContent() {
           );
         })()}
         {"error" in (anemia ?? {}) && <p className="text-red-400 text-sm">{String((anemia as any).error)}</p>}
+      </AgentPanel>
+
+      {/* Agent 8: Differential Aggregator */}
+      <AgentPanel
+        title="Clinical Differential — Agent 8"
+        subtitle="LLM synthesises all agent outputs into a coherent clinical differential"
+        icon={<BrainCircuit className="w-4 h-4" />}
+        onRun={runDifferential}
+        loading={differentialLoading}
+        ran={!!differential}
+      >
+        {differential && !("error" in differential) && (() => {
+          const r = differential as any;
+          return (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
+                <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wider">Model: {r.model_used}</p>
+                <div className="text-sm leading-relaxed whitespace-pre-wrap">{r.synthesis}</div>
+              </div>
+              <a
+                href={`${base}/report/${id}`}
+                target="_blank"
+                className="flex items-center gap-2 px-4 py-2 rounded-md border border-border text-sm hover:bg-accent transition-colors w-fit"
+              >
+                <FileText className="w-4 h-4" /> Download PDF Report (Agent 9)
+              </a>
+            </div>
+          );
+        })()}
+        {"error" in (differential ?? {}) && <p className="text-red-400 text-sm">{String((differential as any).error)}</p>}
       </AgentPanel>
 
     </div>

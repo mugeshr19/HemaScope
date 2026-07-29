@@ -35,6 +35,9 @@ google-genai>=1.0.0
 # Gradio UI
 gradio>=4.36.0
 
+# PDF
+reportlab>=4.2.0
+
 # Testing
 pytest>=8.2.0
 
