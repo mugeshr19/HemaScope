@@ -16,9 +16,11 @@ from llm.reasoning import llm_reasoner
 from llm.agent import blood_cell_agent
 from Agent2.agent2_malaria_screening import MalariaScreeningAgent
 from Agent3.agent3_morphology import MorphologyAgent
+from Agent4.agent4_wbc_classifier import WBCClassifierAgent
 
 _malaria_agent = MalariaScreeningAgent()
 _morphology_agent = MorphologyAgent()
+_wbc_agent = WBCClassifierAgent()
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -129,6 +131,40 @@ async def malaria_screen(file: UploadFile = File(...)):
             "platelet": detection.platelet_count,
         },
     }
+
+
+@router.post("/wbc/from-prediction/{prediction_id}")
+async def wbc_from_prediction(prediction_id: str, db: AsyncSession = Depends(get_db)):
+    """Run Agent 4 on WBC crops already saved by Agent 1."""
+    import cv2
+    record = await prediction_service.get_by_id(db, prediction_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+
+    wbc_crops, wbc_crop_paths = [], []
+    for det in (record.detections or []):
+        if det.get("class") == "WBC":
+            crop = cv2.imread(det["crop_path"])
+            if crop is not None:
+                wbc_crops.append(crop)
+                wbc_crop_paths.append(det["crop_path"])
+
+    if not wbc_crops:
+        return {"total_wbc": 0, "class_counts": {}, "class_pct": {},
+                "differential": {}, "dominant_type": "N/A", "per_cell_predictions": []}
+
+    try:
+        result = _wbc_agent.run(wbc_crops)
+    except Exception as e:
+        logger.error("Agent4 failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"WBC classification failed: {e}")
+
+    result_dict = result.to_dict()
+    for cell in result_dict["per_cell_predictions"]:
+        idx = cell["cell_index"]
+        if idx < len(wbc_crop_paths):
+            cell["crop_url"] = f"/api/v1/crop?path={wbc_crop_paths[idx]}"
+    return result_dict
 
 
 @router.post("/morphology/from-prediction/{prediction_id}")
