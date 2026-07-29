@@ -336,6 +336,7 @@ async def generate_report(
     )
 
 
+@router.post("/wbc/from-prediction/{prediction_id}")
 async def wbc_from_prediction(prediction_id: str, db: AsyncSession = Depends(get_db)):
     """Run Agent 4 on WBC crops already saved by Agent 1."""
     import cv2
