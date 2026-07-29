@@ -7,7 +7,7 @@ import { getAnnotatedImageUrl, getDownloadUrl } from "@/lib/api";
 import type { PredictionResult } from "@/types";
 import {
   Download, Microscope, Activity, Loader2,
-  ShieldAlert, ShieldCheck, ShieldQuestion, FlaskConical, Dna, Biohazard,
+  ShieldAlert, ShieldCheck, ShieldQuestion, FlaskConical, Dna, Biohazard, Droplets,
 } from "lucide-react";
 
 const RISK_STYLES: Record<string, { color: string; icon: React.ReactNode }> = {
@@ -39,6 +39,14 @@ const WBC_COLORS: Record<string, string> = {
 const STATUS_COLORS: Record<string, string> = {
   Normal: "text-green-400", High: "text-red-400",
   Low: "text-yellow-400", Abnormal: "text-orange-400",
+};
+
+const ANEMIA_SEVERITY_COLORS: Record<string, string> = {
+  None:     "text-green-400 border-green-500/30 bg-green-500/5",
+  Mild:     "text-yellow-400 border-yellow-500/30 bg-yellow-500/5",
+  Moderate: "text-orange-400 border-orange-500/30 bg-orange-500/5",
+  Severe:   "text-red-400 border-red-500/30 bg-red-500/5",
+  Unknown:  "text-muted-foreground border-border bg-muted/10",
 };
 
 function AgentPanel({ title, subtitle, icon, onRun, loading, ran, children }: {
@@ -80,6 +88,9 @@ function ResultsContent() {
   const [leukemia, setLeukemia] = useState<Record<string, unknown> | null>(null);
   const [leukemiaLoading, setLeukemiaLoading] = useState(false);
 
+  const [anemia, setAnemia] = useState<Record<string, unknown> | null>(null);
+  const [anemiaLoading, setAnemiaLoading] = useState(false);
+
   const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
   useEffect(() => {
@@ -94,6 +105,13 @@ function ResultsContent() {
       })
       .catch(() => setError("Failed to load result."));
   }, [id]);
+
+  const runAnemia = async () => {
+    setAnemiaLoading(true);
+    try { const { data } = await axios.post(`${base}/anemia/from-prediction/${id}`); setAnemia(data); }
+    catch { setAnemia({ error: "Anemia screening failed." }); }
+    finally { setAnemiaLoading(false); }
+  };
 
   const runMalaria = async () => {
     setMalariaLoading(true);
@@ -384,6 +402,59 @@ function ResultsContent() {
           );
         })()}
         {"error" in (leukemia ?? {}) && <p className="text-red-400 text-sm">{String((leukemia as any).error)}</p>}
+      </AgentPanel>
+
+      {/* Agent 6: Anemia */}
+      <AgentPanel title="Anemia Screening — Agent 6" subtitle={`ResNet18 regressor predicts MCV & Hb from ${result.rbc} RBC crops`}
+        icon={<Droplets className="w-4 h-4" />} onRun={runAnemia} loading={anemiaLoading} ran={!!anemia}>
+        {anemia && !("error" in anemia) && (() => {
+          const r = anemia as any;
+          const colorKey = r.severity === "None" || r.anemia_type === "Normal" ? "None" : r.severity;
+          const color = ANEMIA_SEVERITY_COLORS[colorKey] ?? ANEMIA_SEVERITY_COLORS.Unknown;
+          const severityIcon = colorKey === "None"
+            ? <ShieldCheck className="w-5 h-5 text-green-400" />
+            : colorKey === "Mild" ? <ShieldQuestion className="w-5 h-5 text-yellow-400" />
+            : <ShieldAlert className="w-5 h-5 text-red-400" />;
+          const feats = r.image_features ?? {};
+          return (
+            <div className="space-y-3">
+              <div className={`rounded-lg border p-4 flex items-center gap-4 ${color}`}>
+                {severityIcon}
+                <div>
+                  <p className="font-bold">{r.anemia_type}{r.severity !== "None" ? ` · ${r.severity}` : ""}</p>
+                  <p className="text-sm mt-0.5 opacity-90">{r.recommendation}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border border-border bg-card p-4 text-center">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Predicted MCV</p>
+                  <p className={`text-3xl font-bold mt-1 ${r.mcv_fl < 80 ? "text-yellow-400" : r.mcv_fl > 100 ? "text-orange-400" : "text-green-400"}`}>
+                    {r.mcv_fl} <span className="text-sm font-normal">fL</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">Normal: 80–100 fL</p>
+                </div>
+                <div className="rounded-lg border border-border bg-card p-4 text-center">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Predicted Hb</p>
+                  <p className={`text-3xl font-bold mt-1 ${r.hb_gdl < 12 ? "text-red-400" : r.hb_gdl > 17.5 ? "text-orange-400" : "text-green-400"}`}>
+                    {r.hb_gdl} <span className="text-sm font-normal">g/dL</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">Normal: 12–17.5 g/dL</p>
+                </div>
+              </div>
+              {Object.keys(feats).length > 0 && (
+                <div className="rounded-lg border border-border p-3 grid grid-cols-4 gap-2 text-center">
+                  {Object.entries(feats as Record<string, number>).map(([k, v]) => (
+                    <div key={k}>
+                      <p className="text-sm font-semibold">{v}</p>
+                      <p className="text-xs text-muted-foreground">{k.replace(/_/g, " ")}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+        {"error" in (anemia ?? {}) && <p className="text-red-400 text-sm">{String((anemia as any).error)}</p>}
       </AgentPanel>
 
     </div>

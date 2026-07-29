@@ -14,15 +14,51 @@ from backend.schemas.schemas import (
 )
 from llm.reasoning import llm_reasoner
 from llm.agent import blood_cell_agent
-from Agent2.agent2_malaria_screening import MalariaScreeningAgent
-from Agent3.agent3_morphology import MorphologyAgent
-from Agent4.agent4_wbc_classifier import WBCClassifierAgent
-from Agent5.agent5_leukemia import LeukemiaScreeningAgent
+_malaria_agent = None
+_morphology_agent = None
+_wbc_agent = None
+_leukemia_agent = None
+_anemia_agent = None
 
-_malaria_agent = MalariaScreeningAgent()
-_morphology_agent = MorphologyAgent()
-_wbc_agent = WBCClassifierAgent()
-_leukemia_agent = LeukemiaScreeningAgent()
+
+def _get_malaria_agent():
+    global _malaria_agent
+    if _malaria_agent is None:
+        from Agent2.agent2_malaria_screening import MalariaScreeningAgent
+        _malaria_agent = MalariaScreeningAgent()
+    return _malaria_agent
+
+
+def _get_morphology_agent():
+    global _morphology_agent
+    if _morphology_agent is None:
+        from Agent3.agent3_morphology import MorphologyAgent
+        _morphology_agent = MorphologyAgent()
+    return _morphology_agent
+
+
+def _get_wbc_agent():
+    global _wbc_agent
+    if _wbc_agent is None:
+        from Agent4.agent4_wbc_classifier import WBCClassifierAgent
+        _wbc_agent = WBCClassifierAgent()
+    return _wbc_agent
+
+
+def _get_leukemia_agent():
+    global _leukemia_agent
+    if _leukemia_agent is None:
+        from Agent5.agent5_leukemia import LeukemiaScreeningAgent
+        _leukemia_agent = LeukemiaScreeningAgent()
+    return _leukemia_agent
+
+
+def _get_anemia_agent():
+    global _anemia_agent
+    if _anemia_agent is None:
+        from Agent6.agent6_anemia import AnemiaScreeningAgent
+        _anemia_agent = AnemiaScreeningAgent()
+    return _anemia_agent
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -69,7 +105,7 @@ async def malaria_from_prediction(prediction_id: str, db: AsyncSession = Depends
         }
 
     try:
-        result = _malaria_agent.run(rbc_crops)
+        result = _get_malaria_agent().run(rbc_crops)
     except Exception as e:
         logger.error("Agent2 failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Malaria screening failed: {e}")
@@ -119,7 +155,7 @@ async def malaria_screen(file: UploadFile = File(...)):
         }
 
     try:
-        result = _malaria_agent.run(detection.rbc_crops)
+        result = _get_malaria_agent().run(detection.rbc_crops)
     except Exception as e:
         logger.error("Agent2 failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Malaria screening failed: {e}")
@@ -158,7 +194,7 @@ async def leukemia_from_prediction(prediction_id: str, db: AsyncSession = Depend
                 "class_counts": {}, "per_cell_predictions": []}
 
     try:
-        result = _leukemia_agent.run(wbc_crops)
+        result = _get_leukemia_agent().run(wbc_crops)
     except Exception as e:
         logger.error("Agent5 failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Leukemia screening failed: {e}")
@@ -171,7 +207,43 @@ async def leukemia_from_prediction(prediction_id: str, db: AsyncSession = Depend
     return result_dict
 
 
-@router.post("/wbc/from-prediction/{prediction_id}")
+@router.post("/anemia/from-prediction/{prediction_id}")
+async def anemia_from_prediction(prediction_id: str, db: AsyncSession = Depends(get_db)):
+    """Run Agent 6 on RBC crops already saved by Agent 1."""
+    import cv2
+    record = await prediction_service.get_by_id(db, prediction_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+
+    rbc_crops, rbc_crop_paths = [], []
+    for det in (record.detections or []):
+        if det.get("class") == "RBC":
+            crop = cv2.imread(det["crop_path"])
+            if crop is not None:
+                rbc_crops.append(crop)
+                rbc_crop_paths.append(det["crop_path"])
+
+    if not rbc_crops:
+        return {"total_rbc": 0, "mcv_fl": 0.0, "hb_gdl": 0.0,
+                "anemia_type": "Unknown", "severity": "Unknown",
+                "recommendation": "No RBC crops found.",
+                "image_features": {}, "per_cell_predictions": []}
+
+    try:
+        result = _get_anemia_agent().run(rbc_crops)
+    except Exception as e:
+        logger.error("Agent6 failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Anemia screening failed: {e}")
+
+    result_dict = result.to_dict()
+    for cell in result_dict["per_cell_predictions"]:
+        idx = cell["cell_index"]
+        if idx < len(rbc_crop_paths):
+            cell["crop_url"] = f"/api/v1/crop?path={rbc_crop_paths[idx]}"
+    return result_dict
+
+
+
 async def wbc_from_prediction(prediction_id: str, db: AsyncSession = Depends(get_db)):
     """Run Agent 4 on WBC crops already saved by Agent 1."""
     import cv2
@@ -192,7 +264,7 @@ async def wbc_from_prediction(prediction_id: str, db: AsyncSession = Depends(get
                 "differential": {}, "dominant_type": "N/A", "per_cell_predictions": []}
 
     try:
-        result = _wbc_agent.run(wbc_crops)
+        result = _get_wbc_agent().run(wbc_crops)
     except Exception as e:
         logger.error("Agent4 failed: %s", e)
         raise HTTPException(status_code=500, detail=f"WBC classification failed: {e}")
@@ -227,7 +299,7 @@ async def morphology_from_prediction(prediction_id: str, db: AsyncSession = Depe
                 "recommendation": "No RBC crops found.", "per_cell_predictions": []}
 
     try:
-        result = _morphology_agent.run(rbc_crops)
+        result = _get_morphology_agent().run(rbc_crops)
     except Exception as e:
         logger.error("Agent3 failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Morphology classification failed: {e}")
