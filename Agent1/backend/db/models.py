@@ -6,10 +6,7 @@ from sqlalchemy.orm import DeclarativeBase
 from backend.config import settings
 
 
-import re
-_is_sqlite = settings.DATABASE_URL.startswith("sqlite")
-_connect_args = {"check_same_thread": False} if _is_sqlite else {}
-engine = create_async_engine(settings.DATABASE_URL, echo=settings.DEBUG, connect_args=_connect_args)
+engine = create_async_engine(settings.DATABASE_URL, echo=settings.DEBUG)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 

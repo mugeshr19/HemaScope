@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     MAX_DETECTIONS: int = 1000
 
     # Database
-    DATABASE_URL: str = "sqlite+aiosqlite:///./hemascope.db"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:password@localhost:5432/blood_cell_db"
 
     # LLM — supports Gemini, OpenAI, or Ollama
     LLM_PROVIDER: str = "gemini"          # gemini | openai | ollama

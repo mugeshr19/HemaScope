@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Dropzone } from "@/components/dropzone";
@@ -9,9 +9,6 @@ import { Loader2, Microscope } from "lucide-react";
 export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  if (!mounted) return null;
   const router = useRouter();
 
   const handleSubmit = async () => {
@@ -19,7 +16,6 @@ export default function UploadPage() {
     setLoading(true);
     try {
       const result = await predictImage(file);
-      sessionStorage.setItem(`result_${result.prediction_id}`, JSON.stringify(result));
       toast.success(`Detected ${result.total_cells} cells in ${result.inference_time}s`);
       router.push(`/results?id=${result.prediction_id}`);
     } catch (err: unknown) {
