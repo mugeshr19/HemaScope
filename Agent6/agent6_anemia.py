@@ -22,7 +22,13 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 
+MODEL_ZIP  = Path(__file__).resolve().parent / "agent6_anemia_model.zip"
 MODEL_PATH = str(Path(__file__).resolve().parent / "agent4_anemia_model" / "rbc_regressor.pt")
+
+if not Path(MODEL_PATH).exists() and MODEL_ZIP.exists():
+    import zipfile
+    with zipfile.ZipFile(MODEL_ZIP) as _z:
+        _z.extractall(Path(MODEL_PATH).parent.parent)
 
 _TRANSFORM = transforms.Compose([
     transforms.ToPILImage(),
