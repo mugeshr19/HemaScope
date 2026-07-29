@@ -1,6 +1,6 @@
 """
-Agent 9 — Report Generation
-Formats Agent 8's synthesis + all agent outputs into a structured PDF
+Agent 8 — Report Generation
+Formats Agent 7's synthesis + all agent outputs into a structured PDF
 clinical report using reportlab.
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ from reportlab.platypus import (
 
 
 @dataclass
-class Agent9Result:
+class Agent8Result:
     pdf_bytes: bytes
     filename: str
 
@@ -34,7 +34,7 @@ class ReportGenerator:
         self,
         prediction_id: str,
         image_name: str,
-        agent8_result: dict[str, Any],
+        agent7_result: dict[str, Any],
         generated_at: str | None = None,
     ) -> Agent9Result:
         generated_at = generated_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -44,15 +44,15 @@ class ReportGenerator:
             leftMargin=20*mm, rightMargin=20*mm,
             topMargin=20*mm, bottomMargin=20*mm,
         )
-        story = self._build_story(prediction_id, image_name, agent8_result, generated_at)
+        story = self._build_story(prediction_id, image_name, agent7_result, generated_at)
         doc.build(story)
         pdf_bytes = buf.getvalue()
         filename = f"hemascope_report_{prediction_id[:8]}.pdf"
-        return Agent9Result(pdf_bytes=pdf_bytes, filename=filename)
+        return Agent8Result(pdf_bytes=pdf_bytes, filename=filename)
 
     # ── Story builder ─────────────────────────────────────────────────────────
 
-    def _build_story(self, prediction_id, image_name, agent8, generated_at):
+    def _build_story(self, prediction_id, image_name, agent7, generated_at):
         styles = getSampleStyleSheet()
         h1 = ParagraphStyle("h1", parent=styles["Heading1"], fontSize=18, spaceAfter=4)
         h2 = ParagraphStyle("h2", parent=styles["Heading2"], fontSize=12, spaceAfter=3, textColor=colors.HexColor("#1a56db"))
@@ -74,13 +74,13 @@ class ReportGenerator:
             ["Report ID",    prediction_id],
             ["Image",        image_name],
             ["Generated",    generated_at],
-            ["LLM Model",    agent8.get("model_used", "N/A")],
+            ["LLM Model",    agent7.get("model_used", "N/A")],
         ]
         story.append(self._kv_table(meta))
         story.append(Spacer(1, 6*mm))
 
         # Agent 1 summary
-        a1 = (agent8.get("agent_outputs") or {}).get("agent1", {})
+        a1 = (agent7.get("agent_outputs") or {}).get("agent1", {})
         if a1:
             story.append(Paragraph("Agent 1 — Cell Detection", h2))
             counts = [
@@ -98,7 +98,7 @@ class ReportGenerator:
             ("agent5_leukemia",   "Agent 5 — Leukemia Screening",  ["risk_level","blast_count","blast_pct","total_wbc","recommendation"]),
             ("agent6_anemia",     "Agent 6 — Anemia Screening",    ["anemia_type","severity","mcv_fl","hb_gdl","recommendation"]),
         ]
-        outputs = agent8.get("agent_outputs") or {}
+        outputs = agent7.get("agent_outputs") or {}
         for key, title, fields in sections:
             data = outputs.get(key)
             if not data:
@@ -112,8 +112,8 @@ class ReportGenerator:
         # Agent 8 synthesis
         story.append(HRFlowable(width="100%", thickness=0.5, color=colors.lightgrey))
         story.append(Spacer(1, 3*mm))
-        story.append(Paragraph("Agent 8 — Clinical Differential Synthesis", h2))
-        synthesis = agent8.get("synthesis", "No synthesis available.")
+        story.append(Paragraph("Agent 7 — Clinical Differential Synthesis", h2))
+        synthesis = agent7.get("synthesis", "No synthesis available.")
         for line in synthesis.split("\n"):
             line = line.strip()
             if not line:

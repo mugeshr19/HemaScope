@@ -1,5 +1,5 @@
 """
-Agent 8 — Differential Aggregator
+Agent 7 — Differential Aggregator
 Takes structured JSON outputs from Agents 1–6 and synthesises one coherent
 clinical differential using the configured LLM (Gemini / OpenAI / Ollama).
 No model weights required — prompt-based reasoning only.
@@ -41,7 +41,7 @@ Provide your response in this exact structure:
 
 
 @dataclass
-class Agent8Result:
+class Agent7Result:
     synthesis: str
     agent_outputs: dict
     model_used: str
@@ -82,7 +82,7 @@ class DifferentialAggregator:
         )
         return response.choices[0].message.content.strip()
 
-    def run(self, agent_outputs: dict[str, Any]) -> Agent8Result:
+    def run(self, agent_outputs: dict[str, Any]) -> Agent7Result:
         """
         agent_outputs: dict with any subset of keys:
           agent1, agent2_malaria, agent3_morphology,
@@ -107,7 +107,7 @@ class DifferentialAggregator:
         except Exception as e:
             synthesis = f"LLM error: {e}"
 
-        return Agent8Result(
+        return Agent7Result(
             synthesis=synthesis,
             agent_outputs=agent_outputs,
             model_used=settings.LLM_MODEL,

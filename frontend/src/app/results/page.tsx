@@ -484,7 +484,7 @@ function ResultsContent() {
 
       {/* Agent 8: Differential Aggregator */}
       <AgentPanel
-        title="Clinical Differential — Agent 8"
+        title="Clinical Differential — Agent 7"
         subtitle="LLM synthesises all agent outputs into a coherent clinical differential"
         icon={<BrainCircuit className="w-4 h-4" />}
         onRun={runDifferential}
@@ -504,7 +504,7 @@ function ResultsContent() {
                 target="_blank"
                 className="flex items-center gap-2 px-4 py-2 rounded-md border border-border text-sm hover:bg-accent transition-colors w-fit"
               >
-                <FileText className="w-4 h-4" /> Download PDF Report (Agent 9)
+                <FileText className="w-4 h-4" /> Download PDF Report (Agent 8)
               </a>
             </div>
           );
