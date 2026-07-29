@@ -13,7 +13,6 @@ const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/upload", label: "Upload Image", icon: Upload },
   { href: "/results", label: "Detection Results", icon: ScanLine },
-  { href: "/malaria", label: "Malaria Screening", icon: Microscope },
   { href: "/history", label: "Prediction History", icon: History },
   { href: "/metrics", label: "Training Metrics", icon: BarChart2 },
   { href: "/settings", label: "Settings", icon: Settings },

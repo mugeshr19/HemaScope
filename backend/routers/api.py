@@ -1,4 +1,4 @@
-"""API routers: detect, predict, history, metrics, health, classes, ask."""
+"""API routers: detect, predict, history, metrics, health, classes, ask, malaria."""
 import logging
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Body
@@ -15,11 +15,24 @@ from backend.schemas.schemas import (
 from llm.reasoning import llm_reasoner
 from llm.agent import blood_cell_agent
 from Agent2.agent2_malaria_screening import MalariaScreeningAgent
+from Agent3.agent3_morphology import MorphologyAgent
 
 _malaria_agent = MalariaScreeningAgent()
+_morphology_agent = MorphologyAgent()
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+# ── Malaria ───────────────────────────────────────────────────────────────────
+
+@router.get("/crop")
+async def serve_crop(path: str):
+    """Serve a single crop image by absolute path."""
+    crop_path = Path(path)
+    if not crop_path.exists():
+        raise HTTPException(status_code=404, detail="Crop not found")
+    return FileResponse(str(crop_path), media_type="image/png")
 
 
 @router.post("/malaria/from-prediction/{prediction_id}")
@@ -31,13 +44,13 @@ async def malaria_from_prediction(prediction_id: str, db: AsyncSession = Depends
     if not record:
         raise HTTPException(status_code=404, detail="Prediction not found")
 
-    # Load only RBC crops from disk
-    rbc_crops = []
+    rbc_crops, rbc_crop_paths = [], []
     for det in (record.detections or []):
         if det.get("class") == "RBC":
             crop = cv2.imread(det["crop_path"])
             if crop is not None:
                 rbc_crops.append(crop)
+                rbc_crop_paths.append(det["crop_path"])
 
     if not rbc_crops:
         return {
@@ -46,10 +59,8 @@ async def malaria_from_prediction(prediction_id: str, db: AsyncSession = Depends
             "recommendation": "No RBC crops found for this prediction.",
             "per_cell_predictions": [],
             "agent1": {
-                "total_cells": record.total_cells,
-                "rbc": record.rbc_count,
-                "wbc": record.wbc_count,
-                "platelet": record.platelet_count,
+                "total_cells": record.total_cells, "rbc": record.rbc_count,
+                "wbc": record.wbc_count, "platelet": record.platelet_count,
             },
         }
 
@@ -59,13 +70,17 @@ async def malaria_from_prediction(prediction_id: str, db: AsyncSession = Depends
         logger.error("Agent2 failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Malaria screening failed: {e}")
 
+    result_dict = result.to_dict()
+    for cell in result_dict["per_cell_predictions"]:
+        idx = cell["cell_index"]
+        if idx < len(rbc_crop_paths):
+            cell["crop_url"] = f"/api/v1/crop?path={rbc_crop_paths[idx]}"
+
     return {
-        **result.to_dict(),
+        **result_dict,
         "agent1": {
-            "total_cells": record.total_cells,
-            "rbc": record.rbc_count,
-            "wbc": record.wbc_count,
-            "platelet": record.platelet_count,
+            "total_cells": record.total_cells, "rbc": record.rbc_count,
+            "wbc": record.wbc_count, "platelet": record.platelet_count,
         },
     }
 
@@ -116,15 +131,48 @@ async def malaria_screen(file: UploadFile = File(...)):
     }
 
 
+@router.post("/morphology/from-prediction/{prediction_id}")
+async def morphology_from_prediction(prediction_id: str, db: AsyncSession = Depends(get_db)):
+    """Run Agent 3 on RBC crops already saved by Agent 1."""
+    import cv2
+    record = await prediction_service.get_by_id(db, prediction_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+
+    rbc_crops, rbc_crop_paths = [], []
+    for det in (record.detections or []):
+        if det.get("class") == "RBC":
+            crop = cv2.imread(det["crop_path"])
+            if crop is not None:
+                rbc_crops.append(crop)
+                rbc_crop_paths.append(det["crop_path"])
+
+    if not rbc_crops:
+        return {"total_rbc": 0, "normal_count": 0, "abnormal_count": 0,
+                "abnormal_pct": 0.0, "class_counts": {}, "severity": "Normal",
+                "recommendation": "No RBC crops found.", "per_cell_predictions": []}
+
+    try:
+        result = _morphology_agent.run(rbc_crops)
+    except Exception as e:
+        logger.error("Agent3 failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Morphology classification failed: {e}")
+
+    result_dict = result.to_dict()
+    for cell in result_dict["per_cell_predictions"]:
+        idx = cell["cell_index"]
+        if idx < len(rbc_crop_paths):
+            cell["crop_url"] = f"/api/v1/crop?path={rbc_crop_paths[idx]}"
+    return result_dict
+
+
+# ── Agent chat ────────────────────────────────────────────────────────────────
+
 @router.post("/agent")
 async def agent_chat(
     question: str = Body(..., embed=True),
     image_path: str = Body(default=None, embed=True),
 ):
-    """
-    True agentic endpoint — LLM decides which tools to call.
-    Optionally provide image_path to trigger detection automatically.
-    """
     try:
         answer = blood_cell_agent.run(question, image_path)
         return {"question": question, "answer": answer}
@@ -133,9 +181,10 @@ async def agent_chat(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Detection ─────────────────────────────────────────────────────────────────
+
 @router.post("/detect")
 async def detect(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
-    """Primary detection endpoint — returns counts, detections, annotated URL, LLM summary."""
     upload_dir = settings.RESULTS_DIR / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     image_path = upload_dir / file.filename
@@ -152,7 +201,6 @@ async def detect(file: UploadFile = File(...), db: AsyncSession = Depends(get_db
 
     explanation = llm_reasoner.explain(payload)
     payload["summary"] = explanation
-
     await prediction_service.save(db, payload)
 
     return {
@@ -186,11 +234,6 @@ async def predict(file: UploadFile = File(...), db: AsyncSession = Depends(get_d
 
     record = await prediction_service.save(db, payload)
 
-    detections = [
-        {**d, "class": d["class"]}
-        for d in payload["detections"]
-    ]
-
     return PredictionResponse(
         prediction_id=record.id,
         image_name=record.image_name,
@@ -201,9 +244,11 @@ async def predict(file: UploadFile = File(...), db: AsyncSession = Depends(get_d
         inference_time=record.inference_time,
         timestamp=record.timestamp,
         annotated_image_url=f"/results/{record.id}/annotated",
-        detections=[{**d, **{"class": d["class"]}} for d in detections],
+        detections=[{**d, **{"class": d["class"]}} for d in payload["detections"]],
     )
 
+
+# ── History / Metrics / Health ────────────────────────────────────────────────
 
 @router.get("/history", response_model=list[PredictionSummary])
 async def get_history(skip: int = 0, limit: int = 50, db: AsyncSession = Depends(get_db)):
@@ -230,13 +275,7 @@ async def get_metrics(db: AsyncSession = Depends(get_db)):
 
 @router.get("/classes")
 async def get_classes():
-    """Return the model's class names and their IDs."""
-    return {
-        "classes": [
-            {"id": i, "name": name}
-            for i, name in enumerate(settings.CLASS_NAMES)
-        ]
-    }
+    return {"classes": [{"id": i, "name": name} for i, name in enumerate(settings.CLASS_NAMES)]}
 
 
 @router.post("/ask/{prediction_id}")
@@ -245,16 +284,13 @@ async def ask_question(
     question: str = Body(..., embed=True),
     db: AsyncSession = Depends(get_db),
 ):
-    """Ask the LLM a question about a specific prediction."""
     record = await prediction_service.get_by_id(db, prediction_id)
     if not record:
         raise HTTPException(status_code=404, detail="Prediction not found")
     payload = {
-        "total_cells": record.total_cells,
-        "rbc":         record.rbc_count,
-        "wbc":         record.wbc_count,
-        "platelet":    record.platelet_count,
-        "detections":  record.detections or [],
+        "total_cells": record.total_cells, "rbc": record.rbc_count,
+        "wbc": record.wbc_count, "platelet": record.platelet_count,
+        "detections": record.detections or [],
     }
     answer = llm_reasoner.answer(question, payload)
     return {"question": question, "answer": answer}
@@ -275,6 +311,8 @@ async def health_check(db: AsyncSession = Depends(get_db)):
         version=settings.APP_VERSION,
     )
 
+
+# ── Static files ──────────────────────────────────────────────────────────────
 
 @router.get("/results/{prediction_id}/annotated")
 async def get_annotated_image(prediction_id: str, db: AsyncSession = Depends(get_db)):
